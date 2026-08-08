@@ -412,23 +412,8 @@ Priority order for the next revisions:
 | v0.8 | FreeRTOS integration, SPI microSD driver, FatFS, queued and batched CSV logging |
 | Experimental | USART1 GPS interface and hardware fault investigation |
 
-## 16. Media and evidence to add
-
-The repository should include the following engineering evidence under `docs/media/`:
-
-```text
-docs/media/
-├── hardware-overview.jpg       # Top-down photo with connections visible
-├── ground-station.png          # Live cube, telemetry, and online status
-├── cube-demo.gif               # Short orientation-response demonstration
-├── mission-log-sample.csv      # Representative log excerpt
-└── architecture.svg            # Optional exported system block diagram
-```
-
-A useful demonstration video should show one continuous sequence: boot, storage/logger online, calibration command, physical IMU rotation, matching 3D-cube response, and a short mission-log excerpt.
-
-## 17. License and authorship
+## 16. License and authorship
 
 Developed by **Abdulaziz** as an independent embedded-systems portfolio project.
 
-No open-source license has been selected yet. Until a license is added, the repository should be treated as **all rights reserved**.
+**All rights reserved**.
