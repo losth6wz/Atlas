@@ -1,0 +1,29 @@
+# STM32CubeIDE build output
+/Debug/
+/Release/
+
+# Compiler and linker artifacts (including alternate build folders)
+*.o
+*.obj
+*.d
+*.su
+*.cyclo
+*.elf
+*.map
+*.list
+*.bin
+*.hex
+
+# Generated IDE metadata
+.settings/language.settings.xml
+*.launch
+
+# Editor and operating-system clutter
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+Desktop.ini
+*~
+*.bak
+*.tmp
