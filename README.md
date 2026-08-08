@@ -16,19 +16,19 @@ Current system status:
 
 | System | Status |
 |---|---|
-| STM32 Core | ✅ Working |
-| FreeRTOS | ✅ Working |
-| IMU | ✅ Working |
-| Orientation Estimation | ✅ Working |
-| PC Telemetry | ✅ Working |
-| Command Protocol | ✅ Working |
-| Calibration | ✅ Working |
-| SD Card / FatFS | ✅ Working |
-| RTOS Logger | ✅ Working |
-| CSV Mission Logging | ✅ Working |
-| Queue Overflow Monitoring | ✅ Working |
-| GPS | 🚧 In Development |
-| Health Monitoring | 🚧 Planned |
+| STM32 Core |  Working |
+| FreeRTOS |  Working |
+| IMU |  Working |
+| Orientation Estimation |  Working |
+| PC Telemetry |  Working |
+| Command Protocol |  Working |
+| Calibration |  Working |
+| SD Card / FatFS |  Working |
+| RTOS Logger |  Working |
+| CSV Mission Logging |  Working |
+| Queue Overflow Monitoring |  Working |
+| GPS | In Development |
+| Health Monitoring | Soon |
 
 ---
 
