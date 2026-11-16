@@ -1,227 +1,64 @@
 # ATLAS Mission Computer
 
-**Embedded sensing, telemetry, and data-logging prototype based on the STM32F401RE**
+**STM32F401RE · FreeRTOS · MPU6050 · SPI microSD · UART telemetry**
 
-ATLAS is an engineering prototype developed to study the design of a small embedded mission computer rather than a collection of isolated peripheral demonstrations. The current implementation acquires inertial data from an MPU6050, estimates roll and pitch, accepts commands from a desktop ground station, and records timestamped orientation data to a microSD card under FreeRTOS.
+ATLAS is a laboratory embedded-systems prototype for acquiring inertial measurements, estimating roll/pitch, sending serial telemetry, and logging timestamped measurements to microSD. It is intended as an educational, modular firmware project, **not flight-qualified or safety-critical software**.
 
-> **Project status:** functional laboratory prototype. ATLAS has not been designed, verified, or qualified for flight, safety-critical control, or unattended field deployment.
+**Start here:** [Quick start](#quick-start) · [Hardware](#hardware-and-wiring) · [Architecture](#architecture) · [Testing](#smoke-test-checklist) · [Contributing](#contributing) · [Known issues](#known-issues-and-limitations)
 
-## 1. Current revision
+## Project status
 
-**Firmware revision:** v0.8 development branch
+The firmware identifies itself as **v0.8**. The repository includes an STM32CubeIDE project and the MCU firmware. GPS integration is experimental, not operational.
 
-| Subsystem | State | Verification performed |
-|---|---|---|
-| STM32F401RE platform | Operational | Build, program, boot, and peripheral initialization verified |
-| MPU6050 interface | Operational | I2C communication, wake-up, raw acceleration, and repeated sampling verified |
-| Roll and pitch estimation | Operational with limitations | Static and low-dynamic tilt response verified against manual motion |
-| IMU calibration | Operational | Button- and command-triggered offset calculation verified |
-| USART2 telemetry | Operational | Status, orientation, calibration output, and command responses verified |
-| Desktop ground station | Operational | Connection, console, command transmission, and 3D orientation display verified |
-| FreeRTOS integration | Operational | Scheduler and three application tasks verified |
-| microSD / FatFS | Operational | Card initialization, filesystem mount, file creation, batched writes, and periodic sync verified |
-| CSV mission logging | Operational | Timestamped roll/pitch records written through an RTOS message queue |
-| Queue overflow monitoring | Operational | Drop counter implemented; startup drops eliminated using logger-ready gating |
-| GPS interface | Experimental / blocked | USART1 configured; the tested GY-GPS6MU2 produced a continuously low TX line and no valid NMEA data |
+| Area | Current state | Notes |
+| --- | --- | --- |
+| STM32F401RE + CubeIDE | Working in prior bench tests | Clean builds reported during development |
+| MPU6050 / I2C1 | Working in prior bench tests | Accelerometer-based roll and pitch; no yaw |
+| USART2 telemetry + commands | Working in prior bench tests | 115200 baud, ASCII; `PING` and `CALIBRATE` |
+| FreeRTOS tasks | Implemented | AtlasTask, IMUTask, LoggerTask |
+| SPI microSD / FatFS | Working in prior bench tests | Custom `sd_spi` driver; persistent CSV logger |
+| Queue monitoring | Implemented | Logger-ready gating and drop count |
+| GPS / USART1 | **Unverified** | GY-GPS6MU2 produced repeated `0x00` during testing; root cause not confirmed |
+| Automated tests / CI | Not provided | Validation is currently manual |
 
-## 2. System architecture
+“Working” reflects previous bench observations, not a reproducible qualification or long-duration test report.
 
-```mermaid
-flowchart LR
-    PC[Python Ground Station] <-->|USART2, 115200 bit/s| TEL[Telemetry and Command Protocol]
+## Quick start
 
-    subgraph STM32[STM32F401RE / FreeRTOS]
-        ATLAS[Atlas Core / State Machine]
-        IMUT[IMU Task]
-        LOGT[Logger Task]
-        DATA[RTOS Data Layer]
-        IMUD[MPU6050 Driver]
-        STORE[Storage Module]
-        FAT[FatFS]
-        DISK[user_diskio adapter]
-        SDSPI[Custom SPI SD Driver]
-        GPSD[GPS Driver - experimental]
+### 1. Obtain the project
 
-        ATLAS --> TEL
-        ATLAS --> IMUD
-        IMUT --> IMUD
-        IMUT --> DATA
-        DATA --> LOGT
-        LOGT --> STORE
-        STORE --> FAT
-        FAT --> DISK
-        DISK --> SDSPI
-        GPSD -. planned RTOS integration .-> DATA
-    end
-
-    IMU[MPU6050] <-->|I2C1| IMUD
-    SD[microSD breakout] <-->|SPI1| SDSPI
-    GPS[GY-GPS6MU2 / replacement pending] -.->|USART1, 9600 bit/s| GPSD
+```powershell
+git clone https://github.com/losth6wz/Atlas.git
+cd Atlas
 ```
 
-The architecture is intentionally layered:
+Alternatively, download the repository ZIP. The repository root should contain `Atlas_V0.ioc`, `.project`, `Core/`, `Drivers/`, `FATFS/`, and `Middlewares/`.
 
-1. CubeMX-generated code initializes the MCU, clocks, GPIO, and peripheral handles.
-2. Driver modules implement device-specific communication.
-3. service modules implement telemetry, storage, protocol parsing, and shared RTOS data.
-4. tasks define execution timing and ownership of asynchronous work.
-5. Atlas Core coordinates mission state and user commands.
+### 2. Required equipment
 
-## 3. Hardware configuration
+- ST **NUCLEO-F401RE** with USB connection to its onboard ST-LINK
+- MPU6050 breakout, jumper wires, and common ground
+- SPI microSD breakout and a **disposable/test microSD card**
+- Windows/Linux/macOS computer with **STM32CubeIDE** and the STM32F4 device package
+- Serial terminal at **115200, 8-N-1**, or a compatible ground-station application
+- Optional: GPS breakout for experimental work only
 
-### 3.1 Main controller
+**Safety/data warning:** The development storage path has included conditional filesystem formatting. Do not insert a card containing valuable data until you have reviewed `Core/Src/storage.c` and disabled/confirmed the formatting behavior. Verify supply requirements for *your exact breakout*; do not assume every SD or GPS board accepts 5 V.
 
-- STMicroelectronics NUCLEO-F401RE
-- STM32F401RE, ARM Cortex-M4F
-- ST-LINK virtual COM port used for the desktop link
+### 3. Import and build
 
-### 3.2 MPU6050 inertial sensor
+1. Open **STM32CubeIDE**.
+2. Use **File → Import → Existing Projects into Workspace** and select the cloned `Atlas` folder.
+3. Select the imported project and **Project → Clean**, then **Project → Build Project**.
+4. Check the Problems/Build Console for compilation and link errors.
+5. Connect the Nucleo by USB and use **Run** or the ST-LINK programming workflow.
+6. Open a serial terminal on the **ST-LINK virtual COM port**, configured for **115200 baud, 8 data bits, no parity, 1 stop bit**.
 
-- Interface: I2C1 at 100 kHz
-- Address: `0x68` in the current configuration
-- Accelerometer range used by the conversion code: +/-2 g
-- Scale factor: 16384 LSB/g
-- Data used: three-axis accelerometer output
-- Gyroscope fusion: not yet implemented
+Do **not** regenerate code in CubeMX just to build. If you must change pin/peripheral settings, first commit your work, keep user code on regeneration, and review the resulting diff—especially `FATFS/Target/user_diskio.c`.
 
-### 3.3 microSD storage
+### 4. Expected startup
 
-The tested breakout is connected over SPI1:
-
-| microSD signal | Nucleo connector label |
-|---|---|
-| SCK | D13 |
-| MISO | D12 |
-| MOSI | D11 |
-| CS | D10 / `SD_CS` |
-| GND | GND |
-| VCC | 5 V for the tested regulated breakout |
-
-SPI starts with a conservative prescaler of 256 during development. The onboard LD2 function was relinquished because PA5/D13 is used as the SPI1 clock.
-
-### 3.4 GPS development interface
-
-- USART1 configured for asynchronous operation
-- 9600 bit/s, 8 data bits, no parity, 1 stop bit
-- Initial test module: GY-GPS6MU2
-- Result: module power-on LED activity was observed, but its TX line forced the MCU input low and produced repeated `0x00` bytes
-- Current conclusion: STM32 receive-path behavior was normal when the GPS TX wire was removed; the tested GPS hardware remains suspect
-
-A u-blox NEO-M8N UART breakout is the planned replacement.
-
-## 4. Firmware structure
-
-```text
-Core/
-├── Inc/
-│   ├── atlas.h
-│   ├── gps.h
-│   ├── imu.h
-│   ├── protocol.h
-│   ├── rtos_data.h
-│   ├── sd_spi.h
-│   ├── storage.h
-│   └── telemetry.h
-└── Src/
-    ├── atlas.c
-    ├── gps.c
-    ├── imu.c
-    ├── main.c
-    ├── protocol.c
-    ├── rtos_data.c
-    ├── sd_spi.c
-    ├── storage.c
-    └── telemetry.c
-
-FATFS/
-└── Target/
-    └── user_diskio.c
-```
-
-### Module responsibilities
-
-| Module | Responsibility |
-|---|---|
-| `atlas.c/.h` | State machine, command response, calibration coordination, and mission-level control |
-| `imu.c/.h` | MPU6050 wake-up, register reads, offset calibration, unit conversion, and roll/pitch calculation |
-| `protocol.c/.h` | Interrupt-driven USART2 receive path and ASCII command parsing |
-| `telemetry.c/.h` | Text telemetry formatting, UART transmission, and RTOS mutex protection |
-| `rtos_data.c/.h` | Protected latest-IMU snapshot, logging queue, logger-ready flag, and queue-drop accounting |
-| `storage.c/.h` | FatFS mount, log-file management, buffered writes, sync operations, and filesystem status |
-| `sd_spi.c/.h` | SD-card SPI command layer, block reads/writes, card initialization, and geometry queries |
-| `user_diskio.c` | Thin FatFS adapter that forwards requests to `sd_spi.c` |
-| `gps.c/.h` | Preliminary USART line-read interface; not yet part of a validated GPS task |
-| `main.c` | CubeMX initialization and generated RTOS task entry points |
-
-The SD implementation was deliberately moved out of `user_diskio.c`. CubeMX regenerates that file, so keeping the complete low-level driver there repeatedly destroyed working code. The generated file now contains only forwarding calls inside preserved user-code sections; the maintained implementation is in `sd_spi.c`.
-
-## 5. FreeRTOS execution model
-
-| Task | CMSIS-RTOS priority | Allocated stack | Nominal behavior |
-|---|---:|---:|---|
-| `AtlasTask` | Normal | 2048 bytes | Runs Atlas Core, command handling, calibration requests, and current orientation telemetry; nominal delay 100 ms |
-| `IMUTask` | Above normal | 1024 bytes | Reads the IMU every 10 ms, updates the shared snapshot, and publishes log packets |
-| `LoggerTask` | Low | 2048 bytes | Owns FatFS after scheduler start, drains the log queue, batches CSV records, writes to microSD, and synchronizes periodically |
-
-### Inter-task communication
-
-The IMU task publishes each valid sample through two paths:
-
-- a mutex-protected latest-value snapshot intended for low-rate consumers;
-- an RTOS message queue for ordered logging.
-
-The logging producer is disabled until `LoggerTask` has mounted the filesystem and opened the file. This prevents the queue from filling during slow SD-card startup. Queue insertion failures increment a drop counter; loss is therefore measurable rather than silent.
-
-### Resource synchronization
-
-- Telemetry transmission is protected by a CMSIS-RTOS mutex.
-- The latest IMU snapshot is protected by a separate mutex.
-- `LoggerTask` is the intended sole owner of FatFS and the open log file.
-- Blocking `HAL_Delay()` was removed from the normal periodic Atlas task path after it starved the low-priority logger and caused UART timeouts. Periodic task timing uses `osDelay()`.
-
-## 6. Orientation and calibration
-
-The current orientation estimate is accelerometer-only:
-
-```text
-roll  = atan2(ay, az)
-pitch = atan2(-ax, sqrt(ay^2 + az^2))
-```
-
-The result is converted to degrees and transmitted as integer values.
-
-Calibration averages 500 accelerometer samples with a 5 ms spacing. The X and Y means are treated as zero-g offsets. The Z offset is calculated relative to +1 g:
-
-```text
-x_offset = mean(ax)
-y_offset = mean(ay)
-z_offset = mean(az) - 16384
-```
-
-This procedure assumes the unit is stationary, level, and oriented with +Z aligned with gravity. Calibration values are currently stored only in RAM and are lost after reset.
-
-Because no gyroscope fusion is used, the estimate is suitable primarily for static or low-dynamic tilt. Linear acceleration, vibration, and rapid motion are interpreted as changes in gravity direction. Yaw is not observable from the accelerometer.
-
-## 7. Telemetry and command interface
-
-### 7.1 Physical link
-
-- Peripheral: USART2
-- Baud rate: 115200 bit/s
-- Format: 8-N-1
-- Transport: ST-LINK virtual COM port
-- Payload: line-oriented ASCII
-
-### 7.2 Implemented commands
-
-| Command | Response / action |
-|---|---|
-| `PING` | Returns `PONG` |
-| `CALIBRATE` | Requests IMU calibration |
-
-The Nucleo user button also requests calibration.
-
-### 7.3 Representative messages
+Representative output from a working setup:
 
 ```text
 ATLAS v0.8 | Mission Computer
@@ -232,188 +69,174 @@ STORAGE: ONLINE
 LOGGER: ONLINE
 ```
 
-```text
-ROLL:-12 PITCH:5
+The exact messages depend on firmware revision, card presence, and startup conditions. A build succeeding does not guarantee the peripherals are connected correctly.
+
+### 5. First commands
+
+Send a line terminated with Enter:
+
+| Command | Expected behavior |
+| --- | --- |
+| `PING` | `PONG` |
+| `CALIBRATE` | Begins IMU offset calibration; keep the board stationary and level |
+
+The Nucleo user button also requests calibration. Do not move the sensor while calibrating.
+
+## Hardware and wiring
+
+**Target board:** NUCLEO-F401RE. The CubeMX `.ioc` file and `Core/Inc/main.h` are the source of truth for active pin assignments. The following describes the development wiring; verify against your revision before applying power.
+
+| Peripheral | Interface | Connection / configuration |
+| --- | --- | --- |
+| MPU6050 | I2C1 | Use the board's configured I2C1 SDA/SCL pins, plus compatible VCC and common GND. Verify breakout voltage and address (typically `0x68` in this project). |
+| microSD | SPI1 | SCK → D13; MISO → D12; MOSI → D11; CS → **configured `SD_CS`** (PB6 in the discussed revision). |
+| PC telemetry | USART2 | Nucleo ST-LINK virtual COM port; 115200 8-N-1. |
+| GPS (experimental) | USART1 | PA10/D2 = STM32 RX ← GPS TX; PA9/D8 = STM32 TX → GPS RX; common GND. Default test configuration: 9600 8-N-1. |
+
+**Important:** Earlier development notes described SD CS as D10 in one revision; another configuration uses PB6. Do not treat Arduino header labels as authoritative for chip select: inspect `Atlas_V0.ioc` and `Core/Inc/main.h` before wiring. Do not reuse a pin already assigned to `SD_CS`.
+
+The tested SD breakout was powered from 5 V because its onboard regulator required it. This is **not** a universal microSD voltage specification: the SD card itself is a 3.3 V device. Check the regulator and logic-level shifting on the breakout.
+
+For a new collaborator, the safest hardware sequence is **Nucleo + serial → IMU → SD card → optional GPS**, testing each addition separately.
+
+## Architecture
+
+```mermaid
+flowchart LR
+    IMU[MPU6050] -->|I2C1| IMUT[IMUTask]
+    IMUT --> SNAP[Latest IMU snapshot]
+    IMUT --> QUEUE[Log queue]
+    QUEUE --> LOG[LoggerTask]
+    LOG --> STORE[storage.c / FatFS]
+    STORE --> DISK[user_diskio.c]
+    DISK --> SPI[sd_spi.c / SPI1]
+    SPI --> SD[microSD]
+    ATLAS[AtlasTask / atlas.c] --> TEL[telemetry.c]
+    SNAP --> ATLAS
+    TEL <-->|USART2| PC[PC serial terminal]
+    GPS[GPS / USART1] -. experimental .-> ATLAS
 ```
 
-```text
-CALIBRATION STARTED
-CALIBRATION COMPLETE X:-103 Y:56 Z:318
-```
+### Responsibilities
 
-The protocol is currently human-readable for development. It has no checksum, sequence number, length field, or formal version negotiation.
+| Source | Responsibility |
+| --- | --- |
+| `Core/Src/main.c` | CubeMX-generated initialization and RTOS task entry points |
+| `atlas.c/.h` | Application state, command coordination, and telemetry orchestration |
+| `imu.c/.h` | MPU6050 initialization, sampling, offsets, and tilt calculation |
+| `protocol.c/.h` | Serial command reception/parsing |
+| `telemetry.c/.h` | Serial output and UART synchronization |
+| `rtos_data.c/.h` | Shared IMU snapshot, logging queue, readiness/drop accounting |
+| `storage.c/.h` | FatFS mount and log-file lifecycle |
+| `sd_spi.c/.h` | SD-card command/block transfer over SPI |
+| `FATFS/Target/user_diskio.c` | FatFS adapter forwarding to `sd_spi` |
+| `gps.c/.h` | Experimental blocking GPS line receiver; not a production GPS task |
 
-## 8. Mission logging
+The normal data path is approximately **100 Hz IMU sampling** (10 ms task delay), queued logging, batched writes, and approximately 1-second filesystem synchronization. These are intended/observed behaviors, **not measured worst-case guarantees**.
 
-`LoggerTask` writes to:
+### Why the SD driver is separate
 
-```text
-MISSION.CSV
-```
+CubeMX regenerates `user_diskio.c`. Keeping the full SD implementation in that generated file caused source loss during regeneration. The maintained implementation lives in `sd_spi.c`, while `user_diskio.c` forwards FatFS operations. When modifying storage, preserve this boundary.
 
-Current schema:
+## Mission log format
+
+The logger uses `MISSION.CSV` on the microSD card. The intended columns are:
 
 ```csv
 time_ms,roll_deg,pitch_deg
 10432,2,-5
 10442,2,-5
-10452,3,-4
 ```
 
-`time_ms` is the STM32 millisecond uptime counter, not absolute UTC. Roll and pitch are currently logged as integer degrees.
+These rows are **illustrative**, not a captured validation dataset. `time_ms` is uptime in milliseconds, not UTC; roll/pitch are integer degrees in the current logger format. After a test, stop safely and inspect the file on a PC. Power loss before `f_sync` can lose buffered data or damage the filesystem.
 
-### Write strategy
+## Smoke-test checklist
 
-- The file is opened once and kept open.
-- Multiple CSV rows are formatted into a RAM batch buffer.
-- A batch is written when it approaches the configured threshold.
-- Remaining buffered data is written before the periodic sync.
-- `f_sync()` is called approximately once per second.
+Use a dedicated test card. Record the firmware commit SHA, hardware wiring, and terminal output when reporting results.
 
-This strategy replaced an earlier open/write/close-per-sample implementation. The earlier design was too expensive at the IMU production rate and caused queue overflow. Batching, periodic sync, and logger-ready gating removed the observed startup drops during testing.
+- [ ] Clean build completes without compiler/linker errors.
+- [ ] Board boots and serial output appears at 115200 8-N-1.
+- [ ] `PING` returns `PONG`.
+- [ ] MPU6050 is reported online; orientation changes when gently tilting the board.
+- [ ] `CALIBRATE` completes while the board remains level/stationary.
+- [ ] With test SD card installed, `STORAGE: ONLINE` and `LOGGER: ONLINE` appear.
+- [ ] `MISSION.CSV` exists and contains timestamped rows after a short run.
+- [ ] No unexpected `LOGGER DROPS` messages appear during the test.
+- [ ] Repeat boot/reset test and confirm the system remains responsive.
 
-### Data-integrity implications
+**Note:** The firmware does not yet provide a documented clean log shutdown. Avoid repeatedly removing the card while the logger is running; record any power-loss behavior as a test limitation.
 
-A sudden power loss may discard the most recent unsynchronized data and can still damage the open filesystem. A production revision requires an explicit shutdown path, card-removal handling, and power-fail strategy.
+## Troubleshooting
 
-The current development build may format a card when FatFS reports no recognized filesystem. This behavior is convenient for a dedicated test card but is unsafe for deployment and should be replaced by an explicit operator command.
+| Symptom | First checks |
+| --- | --- |
+| No serial text | Correct ST-LINK COM port, 115200 8-N-1, USB cable, terminal exclusivity, board reset |
+| Build errors after CubeMX regeneration | Inspect Git diff; verify `sd_spi.c/.h` and `user_diskio.c` wrapper |
+| `IMU: OFFLINE` | Power/GND, I2C wiring, device address, pull-ups |
+| `STORAGE: OFFLINE` | CS pin from `.ioc`, SPI wiring, regulated breakout supply, card insertion and FAT filesystem |
+| `LOGGER DROPS` increases | Logger startup readiness, queue size, task priority, SD write/sync latency |
+| Duplicate boot banner during programming | Clear terminal and test a single physical reset separately from IDE Run |
+| GPS returns `0x00` | **Not yet diagnosed conclusively**: verify UART pin mapping, module VCC/GND and TX idle voltage, baud, framing errors, and USART1 loopback before changing firmware |
+| GPS produces no coordinates | Distinguish valid NMEA with no satellite fix from no UART traffic |
 
-## 9. Desktop ground station
+For GPS, avoid adding blocking reception to `AtlasTask`: the current `GPS_ReadLine()` is a diagnostic implementation. A future design should use interrupt/DMA RX buffering, checksum-validated NMEA parsing, and a separate GPS task.
 
-The Python ground station uses Tkinter and PySerial. It provides:
+## Ground station
 
-- serial-port selection and connect/disconnect control;
-- a live telemetry console;
-- `PING` and `CALIBRATE` command buttons;
-- roll and pitch display;
-- a software-rendered 3D cube driven by orientation telemetry;
-- basic IMU online/offline indication.
+A Tkinter/PySerial ground-station application was used during development to display serial output, send commands, and visualize roll/pitch. **Its Python source is not currently included in this repository.** The firmware can still be tested with a normal serial terminal. Do not run an undocumented command such as `python atlas_ground_station.py` unless you have obtained that file separately.
 
-Install the runtime dependency:
+## Contributing
 
-```powershell
-py -m pip install pyserial
-```
+New contributors are welcome to investigate bugs, improve diagnostics, and add modular features. Please keep changes reviewable.
 
-Run the application:
+1. Read this README and reproduce the relevant smoke test first.
+2. Open an issue describing the problem or proposed feature, including expected behavior and hardware assumptions.
+3. Create a feature branch from `main`:
+   ```powershell
+   git switch main
+   git pull --ff-only
+   git switch -c feature/short-description
+   ```
+4. Keep custom device drivers outside CubeMX-generated sections when possible. Do not edit vendored HAL/FreeRTOS/FatFS sources unless the change is intentional and documented.
+5. Build in STM32CubeIDE. If hardware is available, run the relevant tests; otherwise state **not hardware-tested**.
+6. Commit source and configuration changes, not `Debug/`, `Release/`, binaries, or temporary files.
+7. Open a pull request describing **what changed, why, how it was tested, and any remaining risks**. Include console logs/screenshots for hardware behavior when possible.
 
-```powershell
-py atlas_ground_station.py
-```
+### Pull request checklist
 
-Select the Nucleo virtual COM port and 115200 bit/s. Close PuTTY or any other application that already owns the same COM port.
+- [ ] Firmware builds, or build limitation is explained.
+- [ ] Changed pins and peripheral settings are reflected in `Atlas_V0.ioc`.
+- [ ] CubeMX regeneration did not erase custom code.
+- [ ] No blocking calls were introduced in high-priority periodic tasks without justification.
+- [ ] Shared UART, FatFS, and RTOS state access is synchronized.
+- [ ] Test procedure and result are included.
+- [ ] Documentation updated when interface, wiring, or log schema changed.
 
-## 10. Building and programming
+## Known issues and limitations
 
-### Requirements
+- GPS is **not working/validated** with the tested GY-GPS6MU2. The repeated `0x00` readings suggest an electrical, configuration, or module issue, but no direct TX voltage measurement has established the cause.
+- `gps.c` uses blocking byte reception; it must not become the permanent task implementation.
+- Orientation is accelerometer-only: no gyroscope fusion or yaw; dynamic acceleration distorts tilt.
+- IMU calibration is blocking and offsets are volatile.
+- Atlas Core may perform an additional IMU read outside the primary sampling task; single-owner sensor acquisition remains a refactor target.
+- Telemetry transmission is mutex-protected, but shared formatting buffers require care with future concurrent producers.
+- Logger code remains in generated `main.c` and should be modularized.
+- Automatic filesystem formatting and lack of a clean shutdown/power-loss policy are unsuitable for valuable data.
+- No formal CI, unit-test suite, watchdog supervision, or long-duration performance characterization is provided.
 
-- STM32CubeIDE 2.2.0 or a compatible release
-- STM32CubeMX integration and STM32F4 HAL package
-- NUCLEO-F401RE connected through ST-LINK
-- Python 3 with PySerial for the ground station
+## Suggested first contributions
 
-### Procedure
+| Task | Scope | Success criterion |
+| --- | --- | --- |
+| Document verified wiring | Beginner | Add photos and a pin table checked against `.ioc` |
+| Add a reproducible CSV example | Beginner | Include a clearly labeled measured test sample and test conditions |
+| Move LoggerTask to `logger.c/.h` | Intermediate | Same log output and smoke tests; generated `main.c` simplified |
+| Consolidate IMU ownership | Intermediate | One acquisition owner; telemetry uses shared snapshot |
+| GPS receive redesign | Advanced | Nonblocking UART RX, NMEA checksums, explicit fix validity, error counters |
+| Add RTOS health diagnostics | Advanced | Stack/heap/queue metrics with documented thresholds |
 
-1. Open the project in STM32CubeIDE.
-2. Confirm that **Keep User Code when re-generating** is enabled in CubeMX.
-3. Regenerate code only when peripheral settings change.
-4. Confirm that `Core/Src/sd_spi.c` and `Core/Inc/sd_spi.h` remain present.
-5. Clean the project.
-6. Build the selected configuration.
-7. Program and run the target.
-8. Open the ground station and connect to the USART2 virtual COM port.
+## License and authorship
 
-A clean development build was observed with zero compiler errors and zero warnings.
+Developed by **Abdulaziz** as an independent embedded-systems learning and portfolio project.
 
-## 11. Validation performed
-
-| Test | Result |
-|---|---|
-| STM32 project generation, build, and programming | Pass |
-| GPIO heartbeat and user-button input | Pass during early bring-up |
-| MPU6050 I2C detection and register access | Pass |
-| Repeated accelerometer acquisition | Pass |
-| Roll and pitch response to manual rotation | Pass for low-dynamic motion |
-| USART2 text telemetry | Pass |
-| Interrupt-driven command reception | Pass |
-| `PING` / `PONG` exchange | Pass |
-| Button- and PC-triggered calibration | Pass |
-| Python ground-station display and 3D cube | Pass |
-| SPI SD-card initialization | Pass after correcting breakout supply voltage |
-| FatFS mount and filesystem creation | Pass |
-| Persistent CSV logging | Pass |
-| Logger queue-drop detection | Pass |
-| Batch-write throughput correction | Pass; no new drops observed after readiness gating |
-| CubeMX regeneration with custom SD driver preserved | Pass after moving implementation to `sd_spi.c` |
-| GPS raw NMEA reception | Fail with tested GY-GPS6MU2; hardware TX line suspected |
-
-## 12. Engineering issues resolved during development
-
-The following failures materially influenced the current design:
-
-1. **Polling USART reception lost command bytes.** The command path was moved to interrupt-driven, byte-wise reception.
-2. **Application logic accumulated in `main.c`.** IMU, telemetry, protocol, storage, and Atlas Core were separated into modules with public headers and private implementation state.
-3. **CubeMX overwrote the SPI SD driver.** The driver was moved to a non-generated module and `user_diskio.c` was reduced to a preserved adapter.
-4. **The SD breakout failed at 3.3 V input.** The tested board required 5 V at its regulated VCC input.
-5. **FatFS initially reported `FR_NOT_READY`, `FR_NO_FILESYSTEM`, and `FR_DISK_ERR`.** Debug stages were added to separate card-handshake failures from filesystem and disk-geometry failures. Missing status, read, write, and ioctl implementations were completed.
-6. **Higher-priority task blocking starved the logger.** A periodic `HAL_Delay()` inside the Atlas task was replaced by RTOS-aware delays.
-7. **Multiple tasks attempted UART output concurrently.** Telemetry transmission was serialized with a mutex and a common transmit path.
-8. **The logger dropped samples during SD startup.** Queue production now begins only after the logger reports readiness.
-9. **Per-sample filesystem writes were too expensive.** The logger now batches rows and synchronizes at a controlled interval.
-10. **The first GPS module produced a low-level UART fault.** Disconnect testing isolated the issue to the module/output side rather than the STM32 receive path.
-
-These are retained in the documentation because they describe the engineering work required to reach the current state, not just the final feature list.
-
-## 13. Known limitations and technical debt
-
-1. **IMU ownership is not fully consolidated.** `IMUTask` samples for shared data and logging, while Atlas Core still performs an additional IMU read for orientation telemetry. The intended design is a single IMU owner with all consumers reading a protected snapshot or queue.
-2. **Calibration is blocking.** The 500-sample calibration routine occupies the calling context for approximately 2.5 seconds.
-3. **Calibration is volatile.** Offsets are not stored in flash or another non-volatile medium.
-4. **Orientation is accelerometer-only.** There is no gyroscope fusion, dynamic attitude estimator, or yaw estimate.
-5. **The shared telemetry formatting buffer is not designed for unrestricted multi-task formatting.** Transmission is mutex-protected, but future telemetry producers should use task-local buffers or hold the lock through formatting and transmission.
-6. **Logger task code remains in generated `main.c`.** It should be moved into a dedicated `logger.c/.h` module.
-7. **No safe shutdown protocol exists.** The open log file is synchronized periodically but not explicitly closed before arbitrary power removal.
-8. **Automatic formatting is unsuitable for valuable data.** It must be replaced by an explicit authenticated/confirmed command.
-9. **No watchdog or reset-recovery policy is active.**
-10. **No stack high-water, heap, CPU-load, or task-aliveness monitoring is implemented.**
-11. **The serial protocol lacks framing and integrity protection.**
-12. **The timestamp is uptime only and wraps with the HAL tick counter.**
-13. **GPS support is not validated.**
-14. **No environmental, vibration, thermal, EMI/EMC, or long-duration testing has been performed.**
-
-## 14. Planned work
-
-Priority order for the next revisions:
-
-1. Replace the failed GPS hardware with a known u-blox NEO-M8N UART breakout and validate raw NMEA reception.
-2. Implement a non-blocking GPS task and NMEA parser for fix validity, UTC time, latitude, longitude, speed, and satellite count.
-3. Add GPS fields and fix-validity flags to the log schema.
-4. Consolidate MPU6050 ownership under `IMUTask`; make telemetry consume the latest protected snapshot.
-5. Move `LoggerTask` and its policy out of generated `main.c`.
-6. Add a health-monitor task with stack high-water marks, heap status, queue depth, sensor liveness, storage status, and error counters.
-7. Replace development auto-format behavior with an explicit ground-station command.
-8. Add clean mission-start, mission-stop, sync, close, and shutdown sequences.
-9. Add gyroscope acquisition and a complementary or quaternion-based attitude estimator.
-10. Define a versioned packet protocol with framing, sequence numbers, and integrity checking.
-11. Add watchdog supervision and fault-event logging.
-12. Create a custom PCB and controlled power architecture after firmware interfaces stabilize.
-
-## 15. Development history
-
-| Revision | Main result |
-|---|---|
-| v0.1 | STM32 project creation, LED heartbeat, and GPIO input/output |
-| v0.2 | MPU6050 I2C bring-up and device identification |
-| v0.3 | Accelerometer conversion and USART telemetry |
-| v0.4 | Roll and pitch estimation |
-| v0.5 | Interactive calibration and desktop ground station |
-| v0.6 | IMU, telemetry, and protocol modularization |
-| v0.7 | Atlas Core state machine and cleaner application boundary |
-| v0.8 | FreeRTOS integration, SPI microSD driver, FatFS, queued and batched CSV logging |
-| Experimental | USART1 GPS interface and hardware fault investigation |
-
-## 16. License and authorship
-
-Developed by **Abdulaziz** as an independent embedded-systems portfolio project.
-
-**All rights reserved**.
+**All rights reserved.** No open-source license is currently granted. Public visibility does not by itself grant permission to reuse or redistribute the code. **If external code contributions are desired, clarify contribution and licensing terms before accepting them.**
